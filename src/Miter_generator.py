@@ -1,6 +1,92 @@
 import re
 import os
 
+def verilog_extractor(text) -> str:
+    verilog = ""
+    endmodule_count = text.count("endmodule")
+    
+    pattern = r'module\s+[^\(\s]+\s*(?:#\s*\(.*?\))?\s*\(.*?\)\s*;\s*?(?:(?!module\s).)*?\bendmodule'
+    verilog_code_extracted = re.findall(pattern, text, re.DOTALL)
+    for module in verilog_code_extracted:
+        verilog += (module + '\n\n')
+            
+    if endmodule_count > len(verilog_code_extracted):
+        print("Warning: Risk of missing some modules while extracting Verilog code.")
+            
+    return verilog
+
+def extract_always_block(verilog_code):
+    def find_matching_end(code, start):
+        begin_count = 1
+        pos = start
+        while pos < len(code):
+            if re.match(r'\bbegin\b', code[pos:]):
+                begin_count += 1
+                pos += 5  # 移过 'begin'
+            elif re.match(r'\bend\b', code[pos:]):
+                begin_count -= 1
+                pos += 3  # 移过 'end'
+                if begin_count == 0:
+                    return pos
+            else:
+                pos += 1
+        return None
+
+    pattern = r'always\s*@\s*\([^)]*\)\s*begin'
+    matches = []
+    pos = 0
+
+    while True:
+        match = re.search(pattern, verilog_code[pos:])
+        if not match:
+            break
+
+        start = pos + match.start()
+        end = find_matching_end(verilog_code, start + match.end() - match.start())
+        if end:
+            matches.append(verilog_code[start:end + 1])
+            pos = end + 1
+        else:
+            pos += match.end()
+
+    return matches
+
+def extract_always_trigger(text):
+    pattern = r'always\s*@\s*\(([^)]*)\)'  # 匹配 always @(...) 中的括号内容
+    conditions = re.findall(pattern, text)
+    return conditions
+    
+
+def get_clk_from_always_block(text):
+    trigger_list = extract_always_trigger(text)
+    clk_candidate = set()
+    for trigger in trigger_list:
+        if '*' in trigger_list: continue
+        elif not('posedge' in trigger or 'negedge' in trigger): continue
+        trigger_var_list = re.split(r'[\(\)\n\;\, ]+|or', trigger.replace('posedge', '').replace('negedge', ''))
+        trigger_var_list = [x.strip() for x in trigger_var_list if x]
+        for trigger_var in trigger_var_list:
+            clk_candidate.add(trigger_var)
+            
+    always_block_list = extract_always_block(text)
+    for always_block in always_block_list:
+        code_without_always = re.sub(r'always\s*@\s*\(([^)]*)\)', '', always_block, flags=re.DOTALL)
+        if 'always' in code_without_always:
+            print('error, erasing always fails')
+        split_text = re.split(r'[\(\)\n\;\, ]+', code_without_always)
+        split_text = [s for s in split_text if s]
+
+        for var in split_text:
+            if var in clk_candidate:
+                clk_candidate.discard(var)
+    
+    candidate_list = list(clk_candidate)
+    if len(clk_candidate) > 1:
+        for item in candidate_list:
+            if not('clk' in item.lower() or 'clock' in item.lower()):
+                clk_candidate.discard(item)
+                
+    return list(clk_candidate)
 
 class Miter_generator:
     def __init__(self, design_path1, design_path2, force_same_IO=False):
@@ -18,13 +104,13 @@ class Miter_generator:
         self.input_width_dict = self.get_input_width_dict(1)
         self.output_width_dict = self.get_output_width_dict(1)
         
+        self.clk = get_clk_from_always_block(verilog_extractor(self.design1))
+        
         if not set(self.header_var_list1) == set(self.header_var_list2):
-            if force_same_IO:
-                print('[WARNING] The two design modules have different input output lists, the program will force them to have the same IO')
-                self.force_same_IO()
-            else:
-                raise Exception(f"The two design modules have different input output lists: {sorted(self.header_var_list1)} {sorted(self.header_var_list2)}")
+            raise Exception(f"The two design modules have different input output lists: {sorted(self.header_var_list1)} {sorted(self.header_var_list2)}")
                 
+        
+
         
     def force_same_IO(self):
         def regen_IO_def(text):
@@ -82,10 +168,12 @@ class Miter_generator:
         self.output_width_dict = self.get_output_width_dict(1)
         
     
-        
     def get_module_header(self, text):
-        pattern = r'module\s+[^\(\s]+\s*(?:#\s*\(.*\)){0,1}\s*\(.*?\);'
-        verilog_code = re.findall(pattern, text, re.DOTALL)[0]
+        pattern = r'module\s+[^\(\s]+\s*(?:#\s*\(.*?\))?\s*\(.*?\)\s*;'
+        verilog_code = re.findall(pattern, text, re.DOTALL)
+        if len(verilog_code) == 0:
+            raise ValueError("No module found in the given text.")
+        verilog_code = verilog_code[0]
         return verilog_code
     
     def get_module_name_from_header(self, header):
@@ -97,66 +185,108 @@ class Miter_generator:
         pattern = r'[^#]\s*\((.*)\)'
         input_list = re.findall(pattern, header, re.DOTALL)[0]
         input_list = input_list.split(',')
-        input_list = [x.strip() for x in input_list]
-        return input_list
+        # input_list = [x.strip() for x in input_list]
+        input_list = [x.strip().strip('\t') for x in input_list]
+        var_list = []
+        for var in input_list:
+            # trigger_var_list = re.split(r'[\(\)\n\;\, ]+|or', trigger.replace('posedge', '').replace('negedge', ''))
+            if not ']' in var: var_list.append(re.split(r'[\t ]+', var)[-1])
+            else: var_list.append(var.split(']')[-1].strip(' ').strip('\t'))
+        return var_list
     
     def parse_input(self, line):
-        def get_width(text):
-            text = text.replace(']','').replace('[','').replace(' ','')
-            num_list = text.split(':')
+        def get_width(width_text):
+            width_text = width_text.replace(']', '').replace('[', '').replace(' ', '')
+            num_list = width_text.split(':')
+            if len(num_list) != 2:
+                raise ValueError(f"Invalid width format: {width_text}")
             return abs(int(num_list[0]) - int(num_list[1])) + 1
-        if '[' in line:
-            pattern = r'input\s+([^\s]+)\s+([^\s]+)'
-            match = re.search(pattern, line)
-            width_text = match.group(1)
-            input_name = match.group(2)
-            input_width = get_width(width_text)
-        else:
-            pattern = r'input\s+([^\s]+)'
-            match = re.search(pattern, line)
-            input_name = match.group(1)
-            input_width = 1
-        return input_name, input_width
+
+        pattern = r'input\s+(?:wire|reg|logic)?\s*(?:\[(.*?)\])?\s*(.*)'
+        match = re.match(pattern, line)
+
+        if not match:
+            raise ValueError(f"Invalid input declaration: {line}")
+        width_text = match.group(1)
+        signal_part = match.group(2)
+
+        input_width = get_width(width_text) if width_text else 1
+        signal_names = [name.strip() for name in signal_part.split(',')]
+
+        return {name: input_width for name in signal_names}
     
     def parse_output(self, line):
-        def get_width(text):
-            text = text.replace(']','').replace('[','').replace(' ','')
-            num_list = text.split(':')
+        def get_width(width_text):
+
+            width_text = width_text.replace(']', '').replace('[', '').replace(' ', '')
+            num_list = width_text.split(':')
+            if len(num_list) != 2:
+                raise ValueError(f"Invalid width format: {width_text}")
             return abs(int(num_list[0]) - int(num_list[1])) + 1
-        if '[' in line:
-            pattern = r'output\s+([^\s]+)\s+([^\s]+)'
-            match = re.search(pattern, line)
-            width_text = match.group(1)
-            output_name = match.group(2)
-            output_width = get_width(width_text)
-        else:
-            pattern = r'output\s+([^\s]+)'
-            match = re.search(pattern, line)
-            output_name = match.group(1)
-            output_width = 1
-        return output_name, output_width
+
+        pattern = r'output\s+(?:wire|reg|logic)?\s*(?:\[(.*?)\])?\s*(.*)'
+        match = re.match(pattern, line)
+
+        if not match:
+            raise ValueError(f"Invalid output declaration: {line}")
+
+        width_text = match.group(1)
+        signal_part = match.group(2)
+
+        output_width = get_width(width_text) if width_text else 1
+        signal_names = [name.strip() for name in signal_part.split(',')]
+
+        return {name: output_width for name in signal_names}
         
     def get_input_width_dict(self, design_num):
-        design_content = self.design1 if design_num == 1 else self.design2
-        design_list = design_content.split(';')
-        design_list = [x.strip() for x in design_list]
-        input_list = [x for x in design_list if x.startswith('input')]
-        input_width_dict = {}    
-        for input in input_list:
-            input_name, input_width = self.parse_input(input)
-            input_width_dict[input_name] = input_width
-        return input_width_dict
+        def get_input_width_dict_from_body():
+            design_content = self.design1 if design_num == 1 else self.design2
+            design_list = design_content.split(';')
+            design_list = [x.strip() for x in design_list]
+            input_list = [x for x in design_list if x.startswith('input')]
+            input_width_dict = {}
+            for input in input_list:
+                input_width_dict = input_width_dict | self.parse_input(input)
+            return input_width_dict
+        
+        def get_input_width_dict_from_header():
+            header = self.design1_module_header if design_num == 1 else self.design2_module_header
+            pattern = r'[^#]\s*\((.*)\)'
+            input_list = re.findall(pattern, header, re.DOTALL)[0]
+            input_list = input_list.split(',')
+            input_list = [x.strip().strip('\t') for x in input_list]
+            input_width_dict = {}
+            for input in input_list:
+                if input.startswith('input'):
+                    input_width_dict = input_width_dict | self.parse_input(input)
+            return input_width_dict
+        
+        return get_input_width_dict_from_body() | get_input_width_dict_from_header()
             
     def get_output_width_dict(self, design_num):
-        design_content = self.design1 if design_num == 1 else self.design2
-        design_list = design_content.split(';')
-        design_list = [x.strip() for x in design_list]
-        output_list = [x for x in design_list if x.startswith('output')]
-        output_width_dict = {}    
-        for output in output_list:
-            output_name, output_width = self.parse_output(output)
-            output_width_dict[output_name] = output_width
-        return output_width_dict
+        def get_output_width_dict_from_body():
+            design_content = self.design1 if design_num == 1 else self.design2
+            design_list = design_content.split(';')
+            design_list = [x.strip() for x in design_list]
+            output_list = [x for x in design_list if x.startswith('output')]
+            output_width_dict = {}    
+            for output in output_list:
+                output_width_dict = output_width_dict | self.parse_output(output)
+            return output_width_dict
+        
+        def get_output_width_dict_from_header():
+            header = self.design1_module_header if design_num == 1 else self.design2_module_header
+            pattern = r'[^#]\s*\((.*)\)'
+            output_list = re.findall(pattern, header, re.DOTALL)[0]
+            output_list = output_list.split(',')
+            output_list = [x.strip().strip('\t') for x in output_list]
+            output_width_dict = {}
+            for output in output_list:
+                if output.startswith('output'):
+                    output_width_dict = output_width_dict | self.parse_output(output)
+            return output_width_dict
+        
+        return get_output_width_dict_from_body() | get_output_width_dict_from_header()
             
     def gen_miter_header(self):
         return 'module miter();\n'
@@ -181,7 +311,10 @@ class Miter_generator:
         return content
     
     def gen_compare(self):
-        content = 'always @(posedge clk) begin\n'
+        if len(self.clk):
+            content = f'always @(posedge {self.clk[0]}) begin\n'
+        else:
+            content = 'always @* begin\n'
         
         asserts = ''
         for output in self.output_width_dict:
@@ -255,14 +388,14 @@ class Miter_generator:
         
 if __name__ == "__main__":
     
-    design1 = 'dataset_9_14/1/module_vga_text.v'
-    design2 = 'dataset_9_14/1/module_module_1_genFromDot.v'
+    design1 = 'testbench/design_pair1/counter12_1.v'
+    design2 = 'testbench/design_pair1/counter12_2.v'
     miter_generator = Miter_generator(design1, design2)
     # print(miter_generator.design1_module_header)
     # print(miter_generator.design1_module_name)
     print(miter_generator.generate_miter_file_content())
     miter_generator.write_miter(os.path.join(os.path.dirname(design1), 'miter.sv'))
     
-    yosys_commend = 'yosys -p "read_verilog -sv miter.sv; hierarchy -top miter; proc; flatten; sat -tempinduct -prove-asserts -verify;"'
+    # yosys_commend = 'yosys -p "read_verilog -sv miter.sv; hierarchy -top miter; proc; flatten; sat -tempinduct -prove-asserts -verify;"'
         
     
