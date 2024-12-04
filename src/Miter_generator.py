@@ -89,7 +89,7 @@ def get_clk_from_always_block(text):
     return list(clk_candidate)
 
 class Miter_generator:
-    def __init__(self, design_path1, design_path2, force_same_IO=False):
+    def __init__(self, design_path1, design_path2):
         with open(design_path1) as f:
             self.design1 = f.read()
         with open(design_path2) as f:
@@ -202,7 +202,7 @@ class Miter_generator:
                 raise ValueError(f"Invalid width format: {width_text}")
             return abs(int(num_list[0]) - int(num_list[1])) + 1
 
-        pattern = r'input\s+(?:wire|reg|logic)?\s*(?:\[(.*?)\])?\s*(.*)'
+        pattern = r'input\s+(?:wire|reg|logic)?\s*(?:\[(.*?)\])?\s*([^\s;]*)'
         match = re.match(pattern, line)
 
         if not match:
@@ -224,7 +224,7 @@ class Miter_generator:
                 raise ValueError(f"Invalid width format: {width_text}")
             return abs(int(num_list[0]) - int(num_list[1])) + 1
 
-        pattern = r'output\s+(?:wire|reg|logic)?\s*(?:\[(.*?)\])?\s*(.*)'
+        pattern = r'output\s+(?:wire|reg|logic)?\s*(?:\[(.*?)\])?\s*([^\s;]*)'
         match = re.match(pattern, line)
 
         if not match:
@@ -369,10 +369,117 @@ class Miter_generator:
         text = '\n'.join(text_lines)
         return text
                 
+            
+    def parse_reg(line):
+        def get_width(width_text):
+
+            width_text = width_text.replace(']', '').replace('[', '').replace(' ', '')
+            num_list = width_text.split(':')
+            if len(num_list) != 2:
+                raise ValueError(f"Invalid width format: {width_text}")
+            return abs(int(num_list[0]) - int(num_list[1])) + 1
+
+        pattern = r'(?:output\s+)?reg\s*(?:\[(.*?)\])?\s*([^\s;]*)'
+        match = re.match(pattern, line)
+
+        if not match:
+            raise ValueError(f"Invalid reg declaration: {line}")
+
+        width_text = match.group(1)
+        signal_part = match.group(2)
+
+        reg_width = get_width(width_text) if width_text else 1
+
+        signal_names = [name.strip() for name in signal_part.split(',')]
+
+        return {name: reg_width for name in signal_names}
+
+
+    def set_reg_init(self, text):
+
+        def get_width(line):
+            if not '[' in line:
+                return 1
+            width_state = line.split('[')[1].split(']')[0]
+            param1 = int(width_state.split(':')[0].strip())
+            param2 = int(width_state.split(':')[1].strip())
+            return abs(param1 - param2) + 1
+        def parse_reg(line):
+            def get_width(width_text):
+
+                width_text = width_text.replace(']', '').replace('[', '').replace(' ', '')
+                num_list = width_text.split(':')
+                if len(num_list) != 2:
+                    raise ValueError(f"Invalid width format: {width_text}")
+                return abs(int(num_list[0]) - int(num_list[1])) + 1
+
+            pattern = r'(?:output\s+)?reg\s*(?:\[(.*?)\])?\s*([^\s;]*)'
+            match = re.match(pattern, line)
+
+            if not match:
+                raise ValueError(f"Invalid reg declaration: {line}")
+
+            width_text = match.group(1)
+            signal_part = match.group(2)
+
+            reg_width = get_width(width_text) if width_text else 1
+
+            signal_names = [name.strip() for name in signal_part.split(',')]
+
+            return {name: reg_width for name in signal_names}
+        
+        def get_reg_assign(reg_name_width_dict):
+            def get_value(width):
+                return f'{width}\'d0'
+            
+            assign_list = [f'{name} = {get_value(width)}' for name, width in reg_name_width_dict.items()]
+            
+            return ';\n'.join(assign_list)
+        
+        def get_reg_assgin_from_header():
+            def get_value(width):
+                return f'{width}\'d0'
+            
+            header = self.get_module_header(text)
+            pattern = r'[^#]\s*\((.*)\)'
+            var_list = re.findall(pattern, header, re.DOTALL)[0]
+            var_list = var_list.split(',')
+            var_list = [x.strip().strip('\t') for x in var_list]
+            var_width_dict = {}
+            for var in var_list:
+                if 'reg' in var.strip(' ').strip('\t'):
+                    var_width_dict = var_width_dict | self.parse_output(var)
+            assign_list = [f'{name} = {get_value(width)}' for name, width in var_width_dict.items()]
+            return ';\n'.join(assign_list)
+        
+        text_list = text.split(';')
+        text_list = [line.strip().strip('\t') for line in text_list if line.strip()]
+        for i in range(len(text_list)):
+            line = text_list[i]
+            if 'module' in line.strip(' ').strip('\t'):
+                continue
+            if 'reg' in line.strip(' ').strip('\t'):
+                reg_name_width_dict = parse_reg(line)
+                text_list[i] += f';\n{get_reg_assign(reg_name_width_dict)}'
+        
+        index = 0
+        for i in range(len(text_list)):
+            line = text_list[i]
+            pattern = r'module\s+[^\(\s]+\s*(?:#\s*\(.*?\))?\s*\(.*?\)'
+            verilog_code = re.findall(pattern, line, re.DOTALL)
+            if len(verilog_code):
+                index = i
+                text_list.insert(index + 1, get_reg_assgin_from_header())
+                break
+        text = ';\n'.join(text_list)
+        return text
+                
     def generate_miter_file_content(self):
         content = ''
-        content += self.set_reg_init(self.rename_module('design1')) + '\n\n'
-        content += self.set_reg_init(self.rename_module('design2')) + '\n\n'
+        # content += self.set_reg_init(self.rename_module('design1')) + '\n\n'
+        # content += self.set_reg_init(self.rename_module('design2')) + '\n\n'
+        content += self.rename_module('design1')+ '\n\n'
+        content += self.rename_module('design2') + '\n\n'
         content += self.generate_miter_module()
         
         # ############### tackle plus1 bug

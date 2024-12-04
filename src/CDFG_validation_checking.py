@@ -1,4 +1,4 @@
-import RTL_CDFG2RTL_equivalence_checking as Equiv_checker
+import Verilog_equivalence_checking as Equiv_checker
 import argparse
 from glob import glob
 import os

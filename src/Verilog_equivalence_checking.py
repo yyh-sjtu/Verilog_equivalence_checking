@@ -25,7 +25,9 @@ class SubprocessTimeoutException(Exception):
     pass
 
 def run_yosys_sat(miter_path, timeout=15):
-    cmd = f'yosys -p "read_verilog -sv {miter_path}; hierarchy -top miter; proc; flatten; sat -tempinduct -prove-asserts -verify;"'
+    # cmd = f'yosys -p "read_verilog -sv {miter_path}; hierarchy -top miter; proc; flatten; sat -tempinduct -prove-asserts -verify;"'
+    # cmd = f'yosys -p "read_verilog -sv {miter_path}; hierarchy -top miter; proc; flatten; clk2fflogic; sat -tempinduct -prove-asserts -verify;"'
+    cmd = f'yosys -p "read_verilog -sv {miter_path}; hierarchy -top miter; proc; flatten; clk2fflogic; sat -set-init-zero -tempinduct -prove-asserts -verify;"'
     
     try:
         process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -52,23 +54,13 @@ def syntax_check(verilog_path):
         return 'Syntax error'
     return 'Syntax correct'
 
-def CDFG2RTL_equivalence_checking(design_path):
-    origin_rtl_path = glob(os.path.join(design_path, 'module*.v'))
-    origin_rtl_path = [path for path in origin_rtl_path if not 'genFromDot' in path and not '.info' in path][0]
-    # gen rtl from cdfg
-    dot_path = glob(os.path.join(design_path, 'cdfg', '*.dot'))[0]
-    module_name = f'module_{os.path.basename(design_path)}'
-    cdfg2rtler = CDFG2RTL.Cdfg2rtler(dot_path, module_name, original_design_path=origin_rtl_path)
-    regen_rtl_path = os.path.join(design_path, f'module_{module_name}_genFromDot.v')
-    cdfg2rtler.write_rtl(regen_rtl_path)
+def Verilog_equivalence_checking(rtl1_path, rtl2_path, miter_path):
     
-    if 'error' in syntax_check(origin_rtl_path) or 'error' in syntax_check(regen_rtl_path):
+    if 'error' in syntax_check(rtl1_path) or 'error' in syntax_check(rtl2_path):
         raise Exception("Syntax error in RTL")
-    
     # gen miter
     # miter_generator = Miter_generator.Miter_generator(origin_rtl_path, regen_rtl_path)
-    miter_generator = Miter_generator.Miter_generator(origin_rtl_path, regen_rtl_path, force_same_IO=True)
-    miter_path = os.path.join(design_path, 'miter.sv')
+    miter_generator = Miter_generator.Miter_generator(rtl1_path, rtl2_path)
     miter_generator.write_miter(miter_path)
     
     output = run_yosys_sat(miter_path)
@@ -77,7 +69,7 @@ def CDFG2RTL_equivalence_checking(design_path):
 
 
 if __name__ == '__main__':
-    design_path = 'dataset_9_14/494'
-    print(CDFG2RTL_equivalence_checking(design_path))
-    verilog_path = '/home/user/projects/CDFG2RTL/dataset_9_14/1/module_module_1_genFromDot.v'
-    print(syntax_check(verilog_path))
+    rtl1_path = "testbench/design_pair1/counter12_1.v"
+    rtl2_path = "testbench/design_pair1/counter12_2.v"
+    miter_path = "testbench/design_pair1/miter.sv"
+    print(Verilog_equivalence_checking(rtl1_path, rtl2_path, miter_path))
