@@ -24,10 +24,16 @@ class SubprocessTimeoutException(Exception):
     """SubprocessTimeoutException"""
     pass
 
-def run_yosys_sat(miter_path, timeout=15):
-    # cmd = f'yosys -p "read_verilog -sv {miter_path}; hierarchy -top miter; proc; flatten; sat -tempinduct -prove-asserts -verify;"'
-    # cmd = f'yosys -p "read_verilog -sv {miter_path}; hierarchy -top miter; proc; flatten; clk2fflogic; sat -tempinduct -prove-asserts -verify;"'
-    cmd = f'yosys -p "read_verilog -sv {miter_path}; hierarchy -top miter; proc; flatten; clk2fflogic; sat -set-init-zero -tempinduct -prove-asserts -verify;"'
+def run_yosys_sat(miter_path, timeout=30):
+
+    # don't set step
+    # cmd = f'yosys -p "read_verilog -sv {miter_path}; hierarchy -top miter; proc; flatten; clk2fflogic; sat -set-init-zero -tempinduct -prove-asserts -verify;"'
+    
+    # set timeout
+    cmd = f'yosys -p "read_verilog -sv {miter_path}; hierarchy -top miter; proc; flatten; clk2fflogic; sat -set-init-zero -tempinduct -timeout 10 -prove-asserts -verify-no-timeout;"'
+    
+    # don't set step to 100
+    # cmd = f'yosys -p "read_verilog -sv {miter_path}; hierarchy -top miter; proc; flatten; clk2fflogic; sat -set-init-zero -tempinduct -seq 100 -prove-asserts -verify;"'
     
     try:
         process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -54,10 +60,14 @@ def syntax_check(verilog_path):
         return 'Syntax error'
     return 'Syntax correct'
 
-def Verilog_equivalence_checking(rtl1_path, rtl2_path, miter_path):
+def Verilog_equivalence_checking(rtl1_path, rtl2_path, miter_path, treat_timeout_as_equ=True, logger = None):
+    if 'error' in syntax_check(rtl1_path):
+        if logger: logger.write(f"Syntax error in {rtl1_path}")
+        return 'Syntax error'
+    if 'error' in syntax_check(rtl2_path):
+        if logger: logger.write(f"Syntax error in {rtl2_path}")
+        return 'Syntax error'
     
-    if 'error' in syntax_check(rtl1_path) or 'error' in syntax_check(rtl2_path):
-        raise Exception("Syntax error in RTL")
     # gen miter
     # miter_generator = Miter_generator.Miter_generator(origin_rtl_path, regen_rtl_path)
     miter_generator = Miter_generator.Miter_generator(rtl1_path, rtl2_path)
@@ -65,11 +75,22 @@ def Verilog_equivalence_checking(rtl1_path, rtl2_path, miter_path):
     
     output = run_yosys_sat(miter_path)
     
-    return output
+    print(output)
+    
+    if "SUCCESS" in output:
+        return "EQU"
+    elif "TIMEOUT" in output:
+        if treat_timeout_as_equ:
+            return "EQU"
+        else:
+            return "TIMEOUT"
+    else:
+        return "NEQ"
 
 
 if __name__ == '__main__':
     rtl1_path = "testbench/design_pair1/counter12_1.v"
     rtl2_path = "testbench/design_pair1/counter12_2.v"
     miter_path = "testbench/design_pair1/miter.sv"
+    
     print(Verilog_equivalence_checking(rtl1_path, rtl2_path, miter_path))

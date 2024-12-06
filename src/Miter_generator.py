@@ -1,6 +1,11 @@
 import re
 import os
 
+def remove_comments(text):
+    text = re.sub(r'//.*', '', text)
+    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+    return text
+
 def verilog_extractor(text) -> str:
     verilog = ""
     endmodule_count = text.count("endmodule")
@@ -88,12 +93,42 @@ def get_clk_from_always_block(text):
                 
     return list(clk_candidate)
 
+def replace_def(text):
+    def get_def_dict(param_state):
+        param_list = param_state.split(',')
+        param_list = [s.replace('parameter', '').strip().strip('\t') for s in param_list]
+        def_dict = {}
+        for param in param_list:
+            var_list = param.split('=')
+            if not len(var_list) == 2: continue
+            var_list = [s.strip() for s in var_list]
+            def_dict[var_list[0]] = var_list[1]
+        return def_dict
+        
+    pattern = r'module\s+[^\(\s]+\s*#\s*\((.*?)\)\s*\(.*?\)\s*;'
+    def_exp = re.match(pattern, text, re.DOTALL)
+    if not def_exp:
+        return text
+    else:
+        def_dict = get_def_dict(def_exp.group(1))
+    for def_var, def_val in def_dict.items():
+        text = text.replace(def_var, def_val)
+        
+    text =  re.sub(r'#\s*\([\s\S]*?\)', '', text, re.DOTALL)
+    return text
+
+
 class Miter_generator:
-    def __init__(self, design_path1, design_path2):
+    def __init__(self, design_path1, design_path2, preprocess=True):
         with open(design_path1) as f:
-            self.design1 = f.read()
+            self.design1 = remove_comments(f.read())
         with open(design_path2) as f:
-            self.design2 = f.read()
+            self.design2 = remove_comments(f.read())
+            
+        if preprocess:
+            self.design1 = replace_def(self.design1)
+            self.design2 = replace_def(self.design2)
+        
         self.design1_module_header = self.get_module_header(self.design1)
         self.design2_module_header = self.get_module_header(self.design2)
         self.design1_module_name = self.get_module_name_from_header(self.design1_module_header)
@@ -197,7 +232,8 @@ class Miter_generator:
     def parse_input(self, line):
         def get_width(width_text):
             width_text = width_text.replace(']', '').replace('[', '').replace(' ', '')
-            num_list = width_text.split(':')
+            # num_list = width_text.split(':')
+            num_list = [eval(x) for x in width_text.split(':')]
             if len(num_list) != 2:
                 raise ValueError(f"Invalid width format: {width_text}")
             return abs(int(num_list[0]) - int(num_list[1])) + 1
@@ -219,7 +255,8 @@ class Miter_generator:
         def get_width(width_text):
 
             width_text = width_text.replace(']', '').replace('[', '').replace(' ', '')
-            num_list = width_text.split(':')
+            # num_list = width_text.split(':')
+            num_list = [eval(x) for x in width_text.split(':')]
             if len(num_list) != 2:
                 raise ValueError(f"Invalid width format: {width_text}")
             return abs(int(num_list[0]) - int(num_list[1])) + 1
@@ -243,7 +280,7 @@ class Miter_generator:
             design_content = self.design1 if design_num == 1 else self.design2
             design_list = design_content.split(';')
             design_list = [x.strip() for x in design_list]
-            input_list = [x for x in design_list if x.startswith('input')]
+            input_list = [x for x in design_list if 'input' in re.split(r'[\t ]+', x) and 'module' not in re.split(r'[\t ]+', x)]
             input_width_dict = {}
             for input in input_list:
                 input_width_dict = input_width_dict | self.parse_input(input)
@@ -257,7 +294,8 @@ class Miter_generator:
             input_list = [x.strip().strip('\t') for x in input_list]
             input_width_dict = {}
             for input in input_list:
-                if input.startswith('input'):
+                # if input.startswith('input'):
+                if 'input' in re.split(r'[\t ]+', input):
                     input_width_dict = input_width_dict | self.parse_input(input)
             return input_width_dict
         
@@ -268,7 +306,7 @@ class Miter_generator:
             design_content = self.design1 if design_num == 1 else self.design2
             design_list = design_content.split(';')
             design_list = [x.strip() for x in design_list]
-            output_list = [x for x in design_list if x.startswith('output')]
+            output_list = [x for x in design_list if 'output' in re.split(r'[\t ]+', x) and 'module' not in re.split(r'[\t ]+', x)]
             output_width_dict = {}    
             for output in output_list:
                 output_width_dict = output_width_dict | self.parse_output(output)
@@ -282,7 +320,8 @@ class Miter_generator:
             output_list = [x.strip().strip('\t') for x in output_list]
             output_width_dict = {}
             for output in output_list:
-                if output.startswith('output'):
+                # if output.startswith('output'):
+                if 'output' in re.split(r'[\t ]+', output):
                     output_width_dict = output_width_dict | self.parse_output(output)
             return output_width_dict
         
@@ -354,8 +393,8 @@ class Miter_generator:
             if not '[' in line:
                 return 1
             width_state = line.split('[')[1].split(']')[0]
-            param1 = int(width_state.split(':')[0].strip())
-            param2 = int(width_state.split(':')[1].strip())
+            param1 = int(eval((width_state.split(':')[0].strip())))
+            param2 = int(eval((width_state.split(':')[1].strip())))
             return abs(param1 - param2) + 1
         
         text_lines = text.split('\n')
@@ -374,7 +413,8 @@ class Miter_generator:
         def get_width(width_text):
 
             width_text = width_text.replace(']', '').replace('[', '').replace(' ', '')
-            num_list = width_text.split(':')
+            # num_list = width_text.split(':')
+            num_list = [eval(x) for x in width_text.split(':')]
             if len(num_list) != 2:
                 raise ValueError(f"Invalid width format: {width_text}")
             return abs(int(num_list[0]) - int(num_list[1])) + 1
