@@ -75,7 +75,7 @@ def Verilog_equivalence_checking(rtl1_path, rtl2_path, miter_path, treat_timeout
     
     output = run_yosys_sat(miter_path)
     
-    print(output)
+    # print(output)
     
     if "SUCCESS" in output:
         return "EQU"

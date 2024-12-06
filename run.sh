@@ -1,0 +1,1 @@
+python src/run_equ_check_batch.py
