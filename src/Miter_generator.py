@@ -129,6 +129,9 @@ class Miter_generator:
             self.design1 = replace_def(self.design1)
             self.design2 = replace_def(self.design2)
         
+        if not self.count_modules(self.design1) == 1 or not self.count_modules(self.design2) == 1:
+            raise ValueError("There should be one module per design!")
+        
         self.design1_module_header = self.get_module_header(self.design1)
         self.design2_module_header = self.get_module_header(self.design2)
         self.design1_module_name = self.get_module_name_from_header(self.design1_module_header)
@@ -141,11 +144,14 @@ class Miter_generator:
         
         self.clk = get_clk_from_always_block(verilog_extractor(self.design1))
         
-        if not set(self.header_var_list1) == set(self.header_var_list2):
-            raise Exception(f"The two design modules have different input output lists: {sorted(self.header_var_list1)} {sorted(self.header_var_list2)}")
+        # if not set(self.header_var_list1) == set(self.header_var_list2):
+        #     raise Exception(f"The two design modules have different input output lists: {sorted(self.header_var_list1)} {sorted(self.header_var_list2)}")
                 
         
-
+    def count_modules(self, text):
+        pattern = r'module\s+[^\(\s]+\s*(?:#\s*\(.*?\))?\s*\(.*?\)\s*;'
+        verilog_code = re.findall(pattern, text, re.DOTALL)
+        return len(verilog_code)
         
     def force_same_IO(self):
         def regen_IO_def(text):

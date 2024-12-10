@@ -60,7 +60,12 @@ def syntax_check(verilog_path):
         return 'Syntax error'
     return 'Syntax correct'
 
-def Verilog_equivalence_checking(rtl1_path, rtl2_path, miter_path, treat_timeout_as_equ=True, logger = None):
+def Verilog_equivalence_checking(rtl1_path, rtl2_path, miter_path=None, treat_timeout_as_equ=True, logger = None):
+    if miter_path is None:
+        rtl1_name = os.path.basename(rtl1_path).split('.')[0]
+        rtl2_name = os.path.basename(rtl2_path).split('.')[0]
+        miter_path = os.path.join(os.path.dirname(rtl1_path), f"{rtl1_name}_{rtl2_name}_miter.sv")
+    
     if 'error' in syntax_check(rtl1_path):
         if logger: logger.write(f"Syntax error in {rtl1_path}")
         return 'Syntax error'

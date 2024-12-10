@@ -1,4 +1,7 @@
-mytest
-log
+mytest/
+log/
 a.out
 **/__pycache__/
+generation_gpt-4o/
+RTLLM_benchmark/
+src/test_RTLLM.py
